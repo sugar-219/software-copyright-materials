@@ -1,0 +1,94 @@
+# 软著申请材料制作 Skill
+
+为已完成开发的软件准备中国软件著作权申请材料的 Codex skill。AI 根据真实项目核实功能、整理内容及官方要求，配套模板与脚本负责生成可编辑 Word、导出 PDF 和检查排版。
+
+首版针对 **Windows + Microsoft Word**。使用时提供项目目录，由 agent 核对名称、版本、开发方式及缺失事实；个人信息可以留空，由申请人补充。
+
+## 交付内容
+
+| 材料 | 格式 | 条件 |
+| --- | --- | --- |
+| 软件说明书 | DOCX、PDF | 每次生成 |
+| 源程序鉴别材料 | DOCX、PDF | 每次生成 |
+| 申请信息填写稿 | 仅 DOCX | 每次生成 |
+| 合作开发协议模板 | 仅 DOCX | 合作开发时生成 |
+
+单独开发交付 5 个文件，合作开发交付 6 个文件。合作协议供填写、打印、签字后扫描，不交付空模板 PDF。截图、统计、检查记录和内部预览保存在工作目录。
+
+## 安装与调用
+
+将本仓库克隆或解压到个人 skills 目录，使入口文件位于：
+
+```text
+%USERPROFILE%\.agents\skills\software-copyright-materials\SKILL.md
+```
+
+也可以在个人 skills 目录执行：
+
+```powershell
+git clone https://github.com/sugar-219/software-copyright-materials.git
+```
+
+在项目聊天中调用：
+
+```text
+使用 $software-copyright-materials 为当前已完成的项目准备软著申请材料。
+隐私由我填写，不确定的事项先与我确认。
+```
+
+若尚未发现新 skill，重新打开 Codex 后再检查。有关发现和调用机制，见 [OpenAI 官方 skills 文档](https://learn.chatgpt.com/docs/build-skills)。
+
+## 工作流程
+
+1. 检查项目源码、入口、依赖、既有说明及实际功能。
+2. 核对国家版权局及中国版权保护中心的适用规定和当前页面要求。
+3. 整理统一底稿，生成说明书、申请信息，并提取真实源程序。
+4. 使用固定 Word 模板排版，从最终 Word 导出 PDF。
+5. 检查源码映射、分页、字体嵌入及交付文件，并逐页查看渲染图。
+6. 交付材料，明确区分本人待填写内容、待确认事实及尚未核实的规则。
+
+软件名称、实际申请版本和开发方式需要确认。开发完成日期、发表情况、权利归属及实际开发设备不能由源码或当前电脑配置推断。协议模板不预设分工、权利归属或份额。
+
+## 排版与运行条件
+
+- A4 纵向，正文宋体，标题微软雅黑。
+- 源程序英文及符号使用 Consolas，中文使用宋体。
+- 本机安装 Word、宋体、微软雅黑和 Consolas；本仓库不分发这些字体。
+- Python 3.10 及以上，使用能导入所需包的独立环境。
+
+如需安装 Python 依赖，在选定的独立环境中执行：
+
+```powershell
+python -m pip install -r scripts/requirements.txt
+```
+
+Agent 应优先检查已有工作区运行时，避免修改业务项目或全局环境。Windows 命令行可使用 `python -X utf8` 避免中文输出编码问题。
+
+## 文件结构
+
+```text
+SKILL.md                         执行入口与工作规则
+agents/openai.yaml               显示名称及默认调用提示
+assets/fields.json               申请字段、页面选项及长度提示
+assets/templates/                四份 Word 模板
+references/format-requirements.md 格式依据、来源与待核实细节
+references/input-and-tools.md    agent 的制作输入及工具说明
+scripts/materials.py             生成材料、统计并提取源程序
+scripts/export_word.ps1          本机 Word 导出与页面统计
+scripts/inspect_materials.py     源码、字体、PDF和交付集合检查
+scripts/test_materials.py        机械规则测试
+scripts/requirements.txt         Python依赖
+```
+
+## 验证与当前边界
+
+2026-10-15 在本机完成了 13 项测试，覆盖取页边界、长行与中文、原始和显示行数区分、源码映射、版本同步、合作输出、防覆盖及缺失输入。另用 Word 验证了小样张和 63 页源码样本取前后各 30 页后的 60 页输出，检查了 PDF 字体嵌入及可见内容。测试样张不是申报材料。
+
+需要结合每个真实项目重新核实功能、截图、代码范围和申请事实。官方核验由执行 agent 完成，脚本不会仅凭一个网址证明已完成核验。
+
+- 官网细则无法确认时，先完成可核实草稿，再请求相应提示或截图。
+- 说明书超过 60 页时，当前脚本要求进一步处理，不自动裁切段落或图片。
+- 部分特殊源码字符可能需要先确认字体显示方案。
+- 自动行数和技术检查不能替代适用规则、例外情况、权属或登记结果的判断。
+
+具体执行步骤见 [SKILL.md](SKILL.md)，格式来源见 [格式要求参考](references/format-requirements.md)。
