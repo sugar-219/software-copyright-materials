@@ -1,0 +1,4 @@
+interface:
+  display_name: "软著申请材料制作"
+  short_description: "按真实项目及官方要求制作说明书、源程序材料、填写稿和合作协议模板"
+  default_prompt: "使用 $software-copyright-materials 检查这个已完成项目，按官方要求制作软著申请材料，隐私留空，不确定事项先与我确认。"
