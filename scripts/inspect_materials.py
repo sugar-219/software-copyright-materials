@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
 from PIL import Image, ImageDraw
 from pypdf import PdfReader
 import pypdfium2 as pdfium
@@ -35,10 +36,10 @@ def inspect_docx(path, errors):
     for section in doc.sections:
         if abs(section.page_width.mm - 210) > 0.2 or abs(section.page_height.mm - 297) > 0.2:
             errors.append(path.name + "：页面不是 A4")
-    paragraphs = list(doc.paragraphs)
+    roots = [doc.element.body]
     for section in doc.sections:
-        paragraphs.extend(section.header.paragraphs)
-        paragraphs.extend(section.footer.paragraphs)
+        roots.extend([section.header._element, section.footer._element])
+    paragraphs = [Paragraph(p, doc) for root in roots for p in root.xpath(".//w:p")]
     allowed = {"宋体", "微软雅黑", "Consolas", "SimSun", "Microsoft YaHei"}
     for p in paragraphs:
         for r in p.runs:
@@ -111,14 +112,60 @@ def inspect_pdf(path, render_dir, errors, pending):
     return {"pages": len(reader.pages), "fonts": list(fonts.values()), "renders": str(render_dir)}
 
 
-def inspect(work):
+def normalized(text):
+    return re.sub(r"\s", "", text)
+
+
+def body_lines(page, software, number, errors):
+    lines = [line for line in (page.extract_text() or "").splitlines() if line.strip()]
+    expected = normalized(software["name"] + software["version"] + str(number))
+    if not lines or normalized(lines[0]) != expected:
+        errors.append(f"鉴别材料第{number}页页眉名称、版本或连续页码不符")
+        return lines
+    return lines[1:]
+
+
+def source_page_errors(lines, rows, number):
+    errors = []
+    if normalized("".join(lines)) != normalized("".join(row["text"] for row in rows)):
+        errors.append(f"源程序PDF第{number}页全文与所选源码不一致（含遗漏、重复或额外正文）")
+    return errors
+
+
+def review_item(category, message, kind=None, field=None):
+    key = category + ":" + str(kind) + ":" + str(field) + ":" + message
+    return {"id": hashlib.sha256(key.encode()).hexdigest()[:16], "category": category,
+            "message": message, "document": kind, "field": field, "status": "open"}
+
+
+def apply_review(items, review, artifacts):
+    """Resolutions are evidence-backed and bound to the exact document bytes."""
+    for item in items:
+        decision = review.get("items", {}).get(item["id"])
+        if not decision:
+            continue
+        status = decision.get("status")
+        if status not in ["resolved", "awaiting_applicant"] or not decision.get("evidence"):
+            raise ValueError("每项人工处理须给出 resolved/awaiting_applicant 与 evidence")
+        if status == "awaiting_applicant" and item["category"] not in ["privacy", "fact"]:
+            raise ValueError("规则或视觉问题不能通过标为本人填写来跳过")
+        if item["document"]:
+            if item["document"] not in artifacts or not decision.get("artifact_hashes") or decision["artifact_hashes"] != artifacts[item["document"]]:
+                raise ValueError("人工复核的文件哈希与当前材料不一致")
+        item.update(status=status, evidence=decision["evidence"])
+    return items
+
+
+def inspect(work, review_path=None):
     work = Path(work).resolve(strict=True)
     data = read_json(work / "build-input.json")
     export = read_json(work / "word-export-report.json")
     build = read_json(work / "build-report.json")
     mapping = read_json(work / "source-map.json")
     output, project = Path(data["output_dir"]), Path(data["project_root"])
-    errors, pending, pdfs = [], [], {}
+    errors, pending, pdfs, artifacts, page_details = [], [], {}, {}, {}
+    reuse = read_json(work / "reuse.json") if (work / "reuse.json").exists() else {}
+    previous = read_json(Path(reuse["previous_work"]) / "inspection.json") if reuse else {}
     for item in mapping["files"]:
         path = resolve_source(project, item["path"])
         if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
@@ -132,9 +179,19 @@ def inspect(work):
     if mapping["selected_pages"] != expected_pages:
         errors.append("源程序取页范围不符合一般交存的连续性")
     for item in export["documents"]:
+        kind = item["kind"]
+        if kind in artifacts:
+            errors.append("导出报告存在重复材料：" + kind)
+            continue
+        artifacts[kind] = {form: hashlib.sha256(Path(item[form]).read_bytes()).hexdigest() for form in ["docx", "pdf"]}
         if item["kind"] != "source":
             inspect_docx(Path(item["docx"]), errors)
-        report = inspect_pdf(Path(item["pdf"]), work / "renders" / item["kind"], errors, pending)
+        if kind in reuse.get("kinds", []) and artifacts[kind] == reuse["artifact_hashes"][kind]:
+            report = dict(previous["pdfs"][kind], reused=True)
+        else:
+            notices = []
+            report = inspect_pdf(Path(item["pdf"]), work / "renders" / kind, errors, notices)
+            pending.extend(review_item("visual", message, kind) for message in notices)
         pdfs[item["kind"]] = report
         if report["pages"] != item["pages"]:
             errors.append(item["kind"] + "：Word与PDF页数不同")
@@ -143,44 +200,69 @@ def inspect(work):
         if item["kind"] == "source" and report["pages"] == build["expected_source_pages"]:
             source_pdf = PdfReader(item["pdf"])
             for number, (page, rows) in enumerate(zip(source_pdf.pages, mapping["submitted_rows"]), 1):
-                visible = re.sub(r"\s", "", page.extract_text() or "")
-                cursor = 0
-                for row in rows:
-                    value = re.sub(r"\s", "", row["text"])
-                    if not value:
-                        continue
-                    found = visible.find(value, cursor)
-                    if found < 0:
-                        errors.append(f"源程序PDF第{number}页内容与所选源码行不一致")
-                        break
-                    cursor = found + len(value)
+                lines = body_lines(page, data["software"], number, errors)
+                errors.extend(source_page_errors(lines, rows, number))
+                nonblank = len([line for line in lines if line.strip()])
+                original_lines = len({(row["path"], row["line"]) for row in rows if row["text"].strip()})
+                page_details.setdefault("source", []).append({"page": number, "nonblank_display_lines": nonblank,
+                    "original_nonblank_lines": original_lines, "mapped_display_rows": len(rows)})
+                if nonblank < 50:
+                    if number < len(source_pdf.pages):
+                        errors.append(f"源程序PDF第{number}页非空显示行不足50，空行不能计数，需重新排版")
+                    else:
+                        pending.append(review_item("rule", "源程序末页不足50条非空显示行，需核对末页适用规则", "source"))
         if item["kind"] == "manual" and report["pages"] > 60:
             errors.append("说明书超过60页，当前脚本未对说明书自动取页；需按已确认规则处理并复核Word/PDF对应关系")
-        if item["kind"] in ["source", "manual"]:
-            minimum = 50 if item["kind"] == "source" else 30
-            below = [p["page"] for p in item["page_statistics"] if p["word_lines"] < minimum]
-            if below:
-                pending.append(f"{item['kind']} Word统计行数低于一般阈值的页面{below}；截图、末页等例外不能自动判定，需核实规则")
+        if kind == "manual":
+            reader = PdfReader(item["pdf"])
+            for number, page in enumerate(reader.pages, 1):
+                lines = body_lines(page, data["software"], number, errors)
+                images = len(page.images)
+                page_details.setdefault("manual", []).append({"page": number, "nonblank_display_lines": len(lines), "images": images})
+                if len(lines) < 30:
+                    if images or number == len(reader.pages):
+                        pending.append(review_item("rule", f"说明书第{number}页正文不足30行；需核对图文页或末页适用规则", "manual"))
+                    else:
+                        errors.append(f"说明书第{number}页无图且正文不足30行，需核实内容与版式")
+        pending.append(review_item("visual", "逐页查看原始PNG，核对字体、边界、截图与分页；记录所查看的全部页码", kind))
     expected = {FILES["source"], FILES["manual"], FILES["application"], "源程序鉴别材料.pdf", "软件说明书.pdf"}
     if data["software"]["development_mode"] == "合作开发":
         expected.add(FILES["agreement"])
     actual = {p.name for p in output.iterdir() if p.is_file() and not p.name.startswith("~$")}
     if actual != expected:
         errors.append("交付目录的文件集合不符合5/6文件约定")
+    kinds = {"source", "manual", "application"} | ({"agreement"} if "合作开发协议模板.docx" in expected else set())
+    if set(artifacts) != kinds:
+        errors.append("导出报告没有完整覆盖本次材料")
     for issue in build["application_issues"]:
-        pending.append(issue["field"] + "：" + issue["issue"])
+        pending.append(review_item(issue.get("category", "fact"), issue["issue"], "application", field=issue["field"]))
+    for issue in build.get("agreement_issues", []):
+        pending.append(review_item(issue.get("category", "fact"), issue["issue"], "agreement", field=issue["field"]))
     rules = data.get("rules", {})
     if not rules.get("checked_at") or not rules.get("sources"):
-        pending.append("未记录本次官网规则核对日期或来源")
+        pending.append(review_item("rule", "未记录本次官网规则核对日期或来源"))
     for source in rules.get("sources", []):
         domain = urlparse(source.get("url", "")).hostname or ""
         if not any(domain == base or domain.endswith("." + base) for base in ["ncac.gov.cn", "ccopyright.com.cn"]):
-            pending.append("规则来源不是国家版权局或版权中心官方域名，需要核实")
-    pending.extend(rules.get("pending", []))
-    pending.append("需要agent逐页查看渲染图，并核对真实功能、截图来源及用户确认事项；自动检查不代表登记审查通过")
+            pending.append(review_item("rule", "规则来源并非国家版权局或版权中心，需核对机构、适用范围和原文：" + source.get("url", "")))
+    pending.extend(review_item("rule", message) for message in rules.get("pending", []))
+    pending.append(review_item("fact", "核对真实功能、截图来源与用户确认的权属、日期；自动检查不代表登记通过"))
+    pending = list({p["id"]: p for p in pending}.values())
+    # Only matching-byte reused documents may carry forward prior human decisions.
+    inherited = {p["id"]: p for p in reuse.get("review_items", []) if isinstance(p, dict)}
+    for item in pending:
+        previous_item = inherited.get(item["id"], {})
+        old_status = previous_item.get("status")
+        reusable_status = old_status == "resolved" or (old_status == "awaiting_applicant" and item["category"] in ["privacy", "fact"])
+        if item["category"] != "rule" and item["document"] in reuse.get("kinds", []) and artifacts[item["document"]] == reuse["artifact_hashes"][item["document"]] and reusable_status:
+            item.update(status=old_status, evidence=previous_item.get("evidence", "此前对应文件已核对"))
+    if review_path:
+        pending = apply_review(pending, read_json(review_path), artifacts)
+    unresolved = [p for p in pending if p["status"] != "resolved"]
     report = {"technical_checks_passed": not errors, "errors": list(dict.fromkeys(errors)),
-              "pending_review": list(dict.fromkeys(pending)), "pdfs": pdfs,
-              "delivery_files": sorted(actual), "status": "technical_errors" if errors else "pending_agent_review"}
+              "pending_review": pending, "pdfs": pdfs, "page_details": page_details, "artifact_hashes": artifacts,
+              "unresolved_counts": {category: sum(p["category"] == category for p in unresolved) for category in ["privacy", "fact", "rule", "visual"]},
+              "delivery_files": sorted(actual), "status": "technical_errors" if errors else ("draft_pending_review" if unresolved else "review_complete")}
     write_json(work / "inspection.json", report)
     return report
 
@@ -188,10 +270,12 @@ def inspect(work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True)
+    parser.add_argument("--review", help="人工逐项处理记录JSON，须有证据及所核对材料哈希")
     args = parser.parse_args()
-    report = inspect(args.work)
+    report = inspect(args.work, args.review)
     print(json.dumps({"technical_checks_passed": report["technical_checks_passed"],
-                      "errors": report["errors"], "pending_count": len(report["pending_review"])}, ensure_ascii=False))
+                      "errors": report["errors"], "pending_count": sum(p["status"] != "resolved" for p in report["pending_review"]),
+                      "unresolved_counts": report["unresolved_counts"]}, ensure_ascii=False))
     return 0 if report["technical_checks_passed"] else 2
 
 

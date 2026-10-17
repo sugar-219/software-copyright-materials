@@ -4,6 +4,11 @@ $exportJob = Get-Content -LiteralPath $Job -Raw -Encoding UTF8 | ConvertFrom-Jso
 $word = $null
 $currentDocument = $null
 $results = @()
+if ($exportJob.reused_documents) {
+    foreach ($item in $exportJob.reused_documents) {
+        $results += $item
+    }
+}
 try {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
@@ -44,7 +49,7 @@ try {
     $reportPath = Join-Path $exportJob.work_dir 'word-export-report.json'
     @{ documents = $results; renderer = 'Microsoft Word'; status = 'exported_pending_visual_review' } |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    Write-Output "Exported $($results.Count) documents; report: $reportPath"
+    Write-Output "Exported $(@($exportJob.documents).Count) documents; reused $(@($exportJob.reused_documents | Where-Object { $null -ne $_ }).Count); report: $reportPath"
 } finally {
     if ($null -ne $currentDocument) {
         $currentDocument.Close(0)
