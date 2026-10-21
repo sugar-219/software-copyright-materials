@@ -19,6 +19,9 @@ from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
 from PIL import Image, ImageFont
 
+from confirm_input import verify_confirmation
+from business_review import require_business_review
+
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "manual": "软件说明书.docx",
@@ -539,6 +542,8 @@ def build(project, data_path, output, work):
             raise ValueError("缺少已确认的软件信息：" + key)
     if software["development_mode"] not in ["单独开发", "合作开发", "委托开发", "下达任务开发"]:
         raise ValueError("开发方式需明确")
+    confirmation = verify_confirmation(project, data_path)
+    business = require_business_review(project, data)
     files, rows = collect_source(project, data["source_files"], CodeWrapper(),
                                  data.get("source_layout", {}).get("omit_blank_lines", True))
     stats = {key: sum(item[key] for item in files) for key in ["physical_lines", "nonblank_lines"]}
@@ -564,6 +569,8 @@ def build(project, data_path, output, work):
     snapshot["output_dir"] = str(output)
     snapshot["screenshot_evidence"] = images
     write_json(work / "build-input.json", snapshot)
+    write_json(work / "input-confirmation.json", confirmation)
+    write_json(work / "business-review.json", business)
     export = {"work_dir": str(work), "documents": []}
     for kind in docs:
         # Agreement and application are rendered to INTERNAL PDFs only for visual QA.
@@ -592,6 +599,8 @@ def revise(previous_work, data_path, output, work, documents):
     old_data = read_json(previous_work / "build-input.json")
     data = normalize_data(read_json(data_path))
     project = Path(old_data["project_root"]).resolve(strict=True)
+    confirmation = verify_confirmation(project, data_path)
+    business = require_business_review(project, data)
     if project == output or project.is_relative_to(output):
         raise ValueError("修订交付不能覆盖项目根或其上级")
     previous = read_json(previous_work / "inspection.json")
@@ -605,7 +614,11 @@ def revise(previous_work, data_path, output, work, documents):
     global_change = any(data["software"].get(k) != old_data["software"].get(k) for k in ["name", "version", "development_mode"])
     if global_change or data.get("source_files") != old_data.get("source_files") or data.get("source_layout") != old_data.get("source_layout"):
         raise ValueError("软件名称、版本、开发方式或源码范围变化，请执行完整 build 并重新确认申报范围")
-    if data.get("manual") != old_data.get("manual"):
+    current_manual, previous_manual = copy.deepcopy(data.get("manual")), copy.deepcopy(old_data.get("manual"))
+    for manual_data in [current_manual, previous_manual]:
+        for section in (manual_data or {}).get("sections", []):
+            section.pop("feature_ids", None)
+    if current_manual != previous_manual:
         requested.add("manual")
     if data.get("application") != old_data.get("application") or data.get("field_limits") != old_data.get("field_limits") or data["software"].get("short_name") != old_data["software"].get("short_name"):
         requested.add("application")
@@ -659,6 +672,8 @@ def revise(previous_work, data_path, output, work, documents):
             job["reused_documents"].append(entry)
     snapshot = dict(data, project_root=str(project), output_dir=str(output), screenshot_evidence=images)
     write_json(work / "build-input.json", snapshot)
+    write_json(work / "input-confirmation.json", confirmation)
+    write_json(work / "business-review.json", business)
     write_json(work / "source-map.json", mapping)
     write_json(work / "export-job.json", job)
     write_json(work / "reuse.json", {"previous_work": str(previous_work), "kinds": sorted(reuse),

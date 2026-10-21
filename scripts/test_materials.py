@@ -11,6 +11,7 @@ from materials import (CodeWrapper, FILES, build, collect_source,
                        make_source, read_json, resolve_source, select_pages, write_json,
                        agreement_body, agreement_issues, base_document, font, make_application, normalize_data)
 from inspect_materials import inspect_docx, source_page_errors, body_lines, review_item, apply_review
+from confirm_input import record_confirmation
 
 
 class MaterialsTests(unittest.TestCase):
@@ -29,6 +30,7 @@ class MaterialsTests(unittest.TestCase):
                      "manual": {"sections": [{"heading": "测试用途", "blocks": [{"text": "本材料仅验证排版与程序，不用于软著申请。"}]}]}}
         self.data_path = self.root / "input.json"
         write_json(self.data_path, self.data)
+        record_confirmation(self.project, self.data_path, "测试夹具确认，不用于真实申报")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -90,6 +92,7 @@ class MaterialsTests(unittest.TestCase):
         self.data["software"]["development_mode"] = "合作开发"
         self.data["cooperation"] = {"party_count": 3}
         write_json(self.data_path, self.data)
+        record_confirmation(self.project, self.data_path, "测试夹具修改开发方式")
         output, work = self.root / "delivery", self.root / "work"
         build(self.project, self.data_path, output, work)
         doc = Document(output / FILES["agreement"])

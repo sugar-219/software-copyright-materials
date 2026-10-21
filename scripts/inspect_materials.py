@@ -14,6 +14,7 @@ from pypdf import PdfReader
 import pypdfium2 as pdfium
 
 from materials import FILES, read_json, resolve_source, write_json
+from business_review import business_pending
 
 
 def font_info(value):
@@ -166,6 +167,10 @@ def inspect(work, review_path=None):
     errors, pending, pdfs, artifacts, page_details = [], [], {}, {}, {}
     reuse = read_json(work / "reuse.json") if (work / "reuse.json").exists() else {}
     previous = read_json(Path(reuse["previous_work"]) / "inspection.json") if reuse else {}
+    business_path = work / "business-review.json"
+    business_errors, business_warnings = business_pending(project, data, read_json(business_path) if business_path.exists() else None)
+    errors.extend(business_errors)
+    pending.extend(review_item("fact", message) for message in business_warnings)
     for item in mapping["files"]:
         path = resolve_source(project, item["path"])
         if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:

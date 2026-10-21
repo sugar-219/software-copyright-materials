@@ -98,6 +98,7 @@
 
 ## 字段约定
 
+- 新制作按[功能资料与草稿检查](business-analysis.md)在同一输入增加 business 和手册章节的 feature_ids。新工具生成可读草稿及覆盖报告，证据文件字节参与确认指纹；不新增一份独立业务底稿，也不替代真实功能核对。旧输入省略时保持兼容并提示无法检查覆盖关系。
 - 所有申请字段及默认长度、选项均在 `assets/fields.json`，以其中的 key 对应 application。
 - 软件全称、版本、开发方式从 software 自动同步到填写稿。源程序量自动使用 source_files 中原始非空行数，不采用折行后的显示行数。
 - 实际源码范围必须先完整确定，不能只列一小部分代码后把该统计称作整个软件程序量。统计总行数、非空行数及范围保存在工作目录。
@@ -115,8 +116,10 @@
 
 ## 生成、导出与检查
 
+新制作先按[环境、证据与确认](preparation-and-confirmation.md)完成预检、项目清单及业务理解。准备文件放 `<工作根目录>/preparation/`，不要放进要求为空的单次运行目录。生成前依据实际用户确认运行 confirm_input.py record；生成器将校验输入旁的 `<输入文件名去扩展名>-confirmation.json`，不再只依赖 confirmed 布尔值。
+
 1. 在工作根目录保存 input.json，另建空的单次运行子目录。交付目录和单次工作目录均须为空，且不能互相包含；截图和输入JSON放在单次运行目录之外。
-2. 运行 materials.py build；它保留 source-map.json、build-input.json、build-report.json 和 export-job.json 于工作目录。
+2. 运行 materials.py build；它保留 source-map.json、build-input.json、build-report.json、business-review.json 和 export-job.json 于工作目录。
 3. 使用 Windows PowerShell 运行 export_word.ps1 -Job export-job.json。脚本在独立 Word 实例中更新字段、保存最终DOCX并导出PDF，正常和异常结束均关闭其自身文档及实例，不结束用户其他 Word 进程。
 4. 运行 inspect_materials.py --work 工作目录。检查结果为 inspection.json；每一页的PNG及联系表位于 renders/。
 5. 必须核对 errors 和 pending_review，并逐页视觉检查；联系人隐私、官方例外规则等不能由脚本自动判定。
@@ -135,7 +138,7 @@
 
 ### 有完整基线记录的局部修订
 
-先对基线运行新版检查器，真实核对 `inspection.json` 中的 `artifact_hashes` 及原映射。之后使用新的完整输入和两个空目录：
+先对基线运行新版检查器，真实核对 `inspection.json` 中的 `artifact_hashes` 及原映射。之后准备新的完整输入，依据本次授权及既有确认运行 confirm_input.py record，再使用两个空目录。旧基线无需具有新增的 input-confirmation.json，也不能补造历史确认：
 
 ```text
 <Python> <skill>/scripts/materials.py revise --previous-work <原工作目录> --data <新输入.json> --documents agreement --output <空暂存交付目录> --work <空新工作目录>
